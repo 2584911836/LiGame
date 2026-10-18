@@ -141,7 +141,7 @@ func _draw() -> void:
 		draw_circle(particle.pos,3,tint)
 	panel(Rect2(24,654,1104,35),Color(1,1,1,0.88),9)
 	text(Vector2(37,678),game.message,17)
-	text(Vector2(29,709),"Demo 0.4 · A/D/W 或方向键 · M 切换单双人 · R 重开 · N 新冒险 · F11 全屏",14)
+	text(Vector2(29,709),"Demo 0.5 · F1 查看操作 · M 切换单双人 · R 重开 · N 新冒险 · F11 全屏",14)
 	if game.won:
 		panel(Rect2(225,265,702,120),INK,20)
 		text(Vector2(300,313),"搭子下班！下一关马上来……",30,Color.WHITE)

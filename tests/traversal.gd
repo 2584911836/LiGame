@@ -49,7 +49,7 @@ func run() -> void:
 		if failed:
 			break
 	if not failed:
-		for seed_id in [0, 42, 12345, 999999]:
+		for seed_id in seed_list():
 			game.menu_action("endless")
 			game.seed_number = seed_id
 			game.generate()
@@ -58,6 +58,15 @@ func run() -> void:
 				break
 	print("RESULT: %d complete stages; failure=%s" % [completed, failed])
 	quit(1 if failed else 0)
+
+func seed_list() -> Array:
+	var seeds: Array = [0,42,12345,999999]
+	if "--stress" in OS.get_cmdline_user_args():
+		for i in 100:
+			var value := (i * 7919 + 17) % 1000000
+			if value not in seeds:
+				seeds.append(value)
+	return seeds
 
 func solve(description: String) -> void:
 	await frames(30)

@@ -46,6 +46,9 @@ var sound: Node
 var view: Node2D
 var settings := Settings.new()
 var settings_return := "title"
+var pending_binding := ""
+var input_notice := ""
+var using_gamepad := false
 
 
 func _notification(what: int) -> void:
@@ -63,6 +66,8 @@ func _ready() -> void:
 	add_child(sound)
 	apply_settings()
 	Controls.setup()
+	Controls.apply_bindings(settings.bindings)
+	Input.joy_connection_changed.connect(joy_connection_changed)
 	for i in 2:
 		var body := BuddyScript.new()
 		add_child(body)
@@ -83,9 +88,14 @@ func show_title() -> void:
 
 func show_pause() -> void:
 	screen = "pause"
-	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["游戏设置", "settings"], ["重开本关", "retry"], ["返回标题", "title"]])
+	menu.show_screen("休息一下", input_notice if not input_notice.is_empty() else "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["游戏设置", "settings"], ["重开本关", "retry"], ["返回标题", "title"]])
 
 func menu_action(action: String) -> void:
+	if action.begins_with("bind:"):
+		pending_binding = action.trim_prefix("bind:")
+		screen = "binding_capture"
+		menu.show_screen("设置：" + Controls.ACTION_LABELS[pending_binding], "按下新的操作键，Esc 取消。\n不能重复使用其他动作键或 M/R/N/Tab 等系统键。", [["取消", "bindings"]])
+		return
 	match action:
 		"solo", "coop", "endless":
 			solo = action != "coop"
@@ -112,8 +122,7 @@ func menu_action(action: String) -> void:
 		"sound":
 			settings.volume = 0 if settings.volume > 0 else 0.75
 			apply_settings()
-			if save_enabled:
-				settings.write()
+			persist_settings()
 			show_settings()
 		"settings":
 			settings_return = screen
@@ -121,19 +130,26 @@ func menu_action(action: String) -> void:
 		"volume":
 			settings.volume = fmod(settings.volume + 0.25,1.25)
 			apply_settings()
-			if save_enabled:
-				settings.write()
+			persist_settings()
 			show_settings()
 		"motion":
 			settings.reduced_motion = not settings.reduced_motion
-			if save_enabled:
-				settings.write()
+			persist_settings()
+			show_settings()
+		"bindings_back":
 			show_settings()
 		"settings_back":
 			if settings_return == "title":
 				show_title()
 			else:
 				show_pause()
+		"bindings":
+			show_bindings()
+		"bindings_reset":
+			settings.bindings.clear()
+			Controls.apply_bindings(settings.bindings)
+			persist_settings()
+			show_bindings()
 		"seed":
 			screen = "seed"
 			menu.seed_entry()
@@ -161,7 +177,7 @@ func menu_action(action: String) -> void:
 		"help":
 			help_return = screen
 			screen = "help"
-			menu.show_screen("搭子入职指南", "单人：A/D 或方向键移动，W/↑/空格跳跃，Tab 换人。\n双人：橙色 A/D/W，蓝色方向键。M 切换模式。\n手柄：左摇杆移动，A 跳跃；单人 X 换人，Start 暂停。\n各踩一次同色踏板 → 收齐四颗宝石 → 两人进入同色门。\n橙色怕蓝池，蓝色怕橙池，紫池谁碰谁翻车！\nEsc 暂停，F1 帮助，F11 全屏；R 重开，N 新冒险。\n自动保存关数和种子，继续游戏从本关起点开始。", [["明白了", "back"]])
+			menu.show_screen("搭子入职指南", "%s\n单人任意一组键／空格跳，Tab 换人；M 切换模式。\n手柄：左摇杆移动，A 跳跃；单人 X 换人，Start 暂停。\n各踩一次同色踏板 → 收齐四颗宝石 → 两人进入同色门。\n橙色怕蓝池，蓝色怕橙池，紫池谁碰谁翻车！\nEsc 暂停，F1 帮助，F11 全屏；R 重开，N 新冒险。\n自动保存关数和种子，继续游戏从本关起点开始。" % Controls.legend(settings.bindings), [["明白了", "back"]])
 		"back":
 			if help_return == "title":
 				show_title()
@@ -172,7 +188,48 @@ func menu_action(action: String) -> void:
 
 func show_settings() -> void:
 	screen = "settings"
-	menu.show_screen("游戏设置", "设置自动保存在本机，可随时修改。", [["音量：%d%%（点击切换）" % int(settings.volume*100), "volume"], ["静音：%s" % ("开" if settings.volume == 0 else "关"), "sound"], ["减少动态效果：%s" % ("开" if settings.reduced_motion else "关"), "motion"], ["返回", "settings_back"]])
+	menu.show_screen("游戏设置", "设置自动保存在本机，可随时修改。", [["键盘按键设置", "bindings"], ["音量：%d%%（点击切换）" % int(settings.volume*100), "volume"], ["静音：%s" % ("开" if settings.volume == 0 else "关"), "sound"], ["减少动态效果：%s" % ("开" if settings.reduced_motion else "关"), "motion"], ["返回", "settings_back"]])
+
+func show_bindings() -> void:
+	screen = "bindings"
+	pending_binding = ""
+	var buttons: Array = []
+	for action in Controls.DEFAULT_KEYS:
+		var code: int = settings.bindings.get(action,Controls.DEFAULT_KEYS[action])
+		buttons.append([Controls.ACTION_LABELS[action] + "：" + Controls.key_name(code), "bind:"+action])
+	buttons.append_array([["恢复默认", "bindings_reset"],["返回设置", "bindings_back"]])
+	menu.show_screen("键盘按键设置", "单人可使用任意一组键，空格也可跳跃。",buttons)
+
+func persist_settings() -> void:
+	if save_enabled and not settings.write():
+		message = "设置保存失败，本次设置仍有效。"
+
+func _input(event: InputEvent) -> void:
+	if screen == "binding_capture" and event is InputEventKey and event.pressed and not event.echo:
+		get_viewport().set_input_as_handled()
+		if event.keycode == KEY_ESCAPE:
+			show_bindings()
+			return
+		var code: int = event.physical_keycode if event.physical_keycode != 0 else event.keycode
+		var updated := settings.bindings.duplicate()
+		updated[pending_binding] = code
+		if not Controls.valid_bindings(updated):
+			menu.show_screen("这个按键暂时不能使用", "选择一个没有被其他动作占用的字母、数字或方向键。\nM/R/N/Tab 等系统键不能改为动作键；Esc 取消。", [["取消", "bindings"]])
+			return
+		settings.bindings = updated
+		Controls.apply_bindings(updated)
+		persist_settings()
+		show_bindings()
+	elif screen == "play":
+		if event is InputEventJoypadButton or (event is InputEventJoypadMotion and absf(event.axis_value) > 0.25):
+			using_gamepad = true
+		elif event is InputEventKey and event.pressed:
+			using_gamepad = false
+
+func joy_connection_changed(_device: int, connected: bool) -> void:
+	if not connected and using_gamepad and screen == "play":
+		input_notice = "手柄已断开。重新连接后继续，或使用键盘操作。"
+		show_pause()
 
 func apply_settings() -> void:
 	sound.enabled = settings.volume > 0
@@ -185,6 +242,7 @@ func refresh_view() -> void:
 		view.queue_redraw()
 
 func resume_play() -> void:
+	input_notice = ""
 	screen = "play"
 	menu.hide()
 	for buddy in buddies:
@@ -263,13 +321,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				menu_action("settings_back")
 			elif screen == "seed":
 				show_title()
+			elif screen in ["bindings", "binding_capture"]:
+				show_settings()
 		KEY_F11:
 			settings.fullscreen = not settings.fullscreen
 			apply_settings()
-			if save_enabled:
-				settings.write()
+			persist_settings()
 		KEY_F1:
-			if screen != "help":
+			if screen in ["title", "play", "pause"]:
 				menu_action("help")
 	if screen != "play":
 		return
@@ -280,6 +339,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_R:
 			generate()
 		KEY_N:
+			run_mode = "endless"
 			seed_number = (seed_number + 104729) % 1000000
 			stage = 1
 			generate()
