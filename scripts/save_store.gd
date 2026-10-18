@@ -1,13 +1,13 @@
 extends RefCounted
 
-const VERSION := 1
+const VERSION := 2
 var path := "user://progress.cfg"
 var last_error := OK
 
 func read() -> Dictionary:
 	var config := ConfigFile.new()
 	last_error = config.load(path)
-	if last_error != OK or config.get_value("run", "version", 0) != VERSION:
+	if last_error != OK or config.get_value("run", "version", 0) not in [1, VERSION]:
 		return {}
 	for key in ["stage", "seed", "solo"]:
 		if not config.has_section_key("run", key):
@@ -19,14 +19,18 @@ func read() -> Dictionary:
 		return {}
 	if stage < 1 or stage > 1000000 or seed_id < 0 or seed_id >= 1000000:
 		return {}
-	return {"stage": stage, "seed": seed_id, "solo": solo}
+	var mode: Variant = config.get_value("run", "mode", "endless")
+	if mode not in ["endless", "lessons"]:
+		return {}
+	return {"stage": stage, "seed": seed_id, "solo": solo, "mode": mode}
 
-func write(stage: int, seed_id: int, solo: bool) -> bool:
+func write(stage: int, seed_id: int, solo: bool, mode: String = "endless") -> bool:
 	var config := ConfigFile.new()
 	config.set_value("run", "version", VERSION)
 	config.set_value("run", "stage", stage)
 	config.set_value("run", "seed", seed_id)
 	config.set_value("run", "solo", solo)
+	config.set_value("run", "mode", mode)
 	last_error = config.save(path + ".tmp")
 	if last_error != OK:
 		return false

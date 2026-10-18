@@ -8,6 +8,8 @@ const QUIPS := ["搭子齐心，其利断金——也可能一起掉进汤里。
 const BuddyScript = preload("res://scripts/buddy.gd")
 const Controls = preload("res://scripts/controls.gd")
 const SaveStore = preload("res://scripts/save_store.gd")
+const LevelGenerator = preload("res://scripts/level_generator.gd")
+const Sounds = preload("res://scripts/sounds.gd")
 const Menu = preload("res://scripts/menu.gd")
 var buddies: Array[CharacterBody2D] = []
 var platforms: Array[Rect2] = []
@@ -32,6 +34,14 @@ var menu: CanvasLayer
 var store := SaveStore.new()
 var save_enabled := true
 var elapsed := 0.0
+var run_mode := "endless"
+var devices: Array = []
+var level_title := ""
+var level_hint := ""
+var theme_index := 0
+var completed := false
+var sound: Node
+
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and screen == "play" and menu != null:
@@ -40,6 +50,8 @@ func _notification(what: int) -> void:
 
 func _ready() -> void:
 	seed_number = int(Time.get_unix_time_from_system()) % 1000000
+	sound = Sounds.new()
+	add_child(sound)
 	Controls.setup()
 	for i in 2:
 		var body := BuddyScript.new()
@@ -56,17 +68,18 @@ func show_title() -> void:
 	var buttons: Array = []
 	if not store.read().is_empty():
 		buttons.append(["继续冒险", "continue"])
-	buttons.append_array([["单人出发", "solo"], ["双人同屏", "coop"], ["玩法与操作", "help"], ["退出游戏", "quit"]])
+	buttons.append_array([["单人教学 · 六关入职", "solo"], ["双人教学 · 六关团建", "coop"], ["随机挑战 · 无限工单", "endless"], ["玩法与操作", "help"], ["退出游戏", "quit"]])
 	menu.show_screen("冷热搭子", "摸鱼闯关队 · 两个搭子，一起下班！\n支持键盘与手柄 · Enter 确认 · 方向键选择", buttons)
 
 func show_pause() -> void:
 	screen = "pause"
-	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["重开本关", "retry"], ["返回标题", "title"]])
+	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["音效：%s" % ("开" if sound.enabled else "关"), "sound"], ["重开本关", "retry"], ["返回标题", "title"]])
 
 func menu_action(action: String) -> void:
 	match action:
-		"solo", "coop":
-			solo = action == "solo"
+		"solo", "coop", "endless":
+			solo = action != "coop"
+			run_mode = "endless" if action == "endless" else "lessons"
 			selected = 0
 			stage = 1
 			deaths = 0
@@ -82,9 +95,13 @@ func menu_action(action: String) -> void:
 			stage = saved.stage
 			seed_number = saved.seed
 			solo = saved.solo
+			run_mode = saved.get("mode", "endless")
 			selected = 0
 			generate()
 			resume_play()
+		"sound":
+			sound.enabled = not sound.enabled
+			show_pause()
 		"resume":
 			resume_play()
 		"retry":
@@ -112,7 +129,7 @@ func resume_play() -> void:
 		buddy.jump_was_held = true
 
 func checkpoint() -> void:
-	if save_enabled and not store.write(stage, seed_number, solo):
+	if save_enabled and not store.write(stage, seed_number, solo, run_mode):
 		message = "存档写入失败，本次仍可继续游玩。"
 
 func add_platform(rect: Rect2) -> void:
@@ -133,18 +150,19 @@ func generate() -> void:
 	platforms.clear()
 	pools.clear()
 	gems.clear()
-	rng.seed = seed_number + stage * 7919
+	var data := LevelGenerator.make(seed_number, stage, run_mode)
 	add_platform(Rect2(0, FLOOR_Y, 1152, 110))
 	add_platform(Rect2(-30, 0, 30, 720))
 	add_platform(Rect2(1152, 0, 30, 720))
-	# Bounded gaps and heights guarantee a traversable ground route.
-	for i in 4:
-		var x := 230.0 + i * 205.0 + rng.randf_range(-18, 18)
-		var width := rng.randf_range(65, 95)
-		pools.append({"rect": Rect2(x, FLOOR_Y - 8, width, 18), "kind": rng.randi_range(0, 2)})
-		var y := rng.randf_range(465, 505)
-		add_platform(Rect2(x - 8, y, 125, 18))
-		gems.append({"pos": Vector2(x + 45, y - 28), "kind": i % 2, "taken": false})
+	for rect in data.platforms:
+		add_platform(rect)
+	pools.assign(data.pools)
+	gems.assign(data.gems)
+	devices = data.devices
+	level_title = data.title
+	level_hint = data.hint
+	theme_index = data.theme
+	completed = false
 	elapsed = 0
 	collected = 0
 	gate_open = false
@@ -204,17 +222,32 @@ func _physics_process(delta: float) -> void:
 	if won:
 		transition += delta
 		if transition > 1.8:
+			if run_mode == "lessons" and stage >= 6:
+				if not completed:
+					completed = true
+					screen = "complete"
+					menu.show_screen("恭喜下班！", "六张工单全部完成！现在去挑战随机组合关卡吧。", [["开始随机挑战", "endless"], ["返回标题", "title"]])
+				return
 			stage += 1
 			generate()
 			checkpoint()
 		queue_redraw()
 		return
+	for device in devices:
+		device.cooldown = maxf(0, device.cooldown - delta)
 	for i in 2:
 		var body := buddies[i]
 		var control: Vector2 = Controls.read(solo, selected, i)
+		for device in devices:
+			if device.type == "wind" and device.rect.has_point(body.position):
+				body.velocity.y -= 900 * delta
 		body.step(delta, control.x, control.y > 0)
+		if body.jumped:
+			sound.play_cue("jump")
+		apply_devices(i)
 		for pool in pools:
 			if pool.rect.has_point(body.position + Vector2(0, 20)) and pool.kind != i:
+				sound.play_cue("oops")
 				deaths += 1
 				message = "喝错汤了！搭子一起重生，宝石和门锁进度保留。"
 				reset_buddies()
@@ -222,18 +255,35 @@ func _physics_process(delta: float) -> void:
 				return
 		for gem in gems:
 			if not gem.taken and gem.kind == i and body.position.distance_to(gem.pos) < 34:
+				sound.play_cue("gem")
 				gem.taken = true
 				collected += 1
 	update_objectives()
 	queue_redraw()
+
+func apply_devices(buddy_id: int) -> void:
+	var body := buddies[buddy_id]
+	for device in devices:
+		if device.type == "spring" and device.cooldown <= 0 and body.is_on_floor() and absf(body.position.x - device.pos.x) < 22 and absf(body.position.y + 21 - device.pos.y) < 8:
+			body.velocity.y = -850
+			device.cooldown = 0.35
+			sound.play_cue("spring")
+		if device.type == "bridge" and not device.active and buddy_id == device.kind and Rect2(device.pos - Vector2(18, 45), Vector2(36, 45)).has_point(body.position):
+			device.active = true
+			add_platform(device.bridge)
+			sound.play_cue("gate")
 
 func update_objectives() -> void:
 	# Each matching plate latches separately so solo players can activate them in any order.
 	for i in 2:
 		if Rect2(96 + i * 59, 565, 40, 45).has_point(buddies[i].position):
 			plates_activated[i] = true
+	var was_open := gate_open
 	gate_open = plates_activated[0] and plates_activated[1]
-	if gate_open and collected == gems.size() and at_exit(0) and at_exit(1):
+	if gate_open and not was_open:
+		sound.play_cue("gate")
+	if not won and gate_open and collected == gems.size() and at_exit(0) and at_exit(1):
+		sound.play_cue("win")
 		won = true
 		message = "打卡成功！下一份离谱工单正在派送……"
 	queue_redraw()
@@ -252,15 +302,15 @@ func label_at(pos: Vector2, text: String, size := 20, color := Color("23354d")) 
 	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 func _draw() -> void:
-	draw_rect(Rect2(0, 0, 1152, 720), Color("edf7fb"))
+	draw_rect(Rect2(0, 0, 1152, 720), LevelGenerator.THEMES[theme_index][1])
 	for i in 8:
 		draw_circle(Vector2(i * 180 + 40, 280 + (i % 3) * 50), 90, Color("e1eef3"))
-	label_at(Vector2(28, 38), "冷热搭子 · 摸鱼闯关队", 28)
+	label_at(Vector2(28, 38), "冷热搭子 · " + level_title, 28)
 	label_at(Vector2(28, 70), "第 %d 关  |  种子 %d  |  宝石 %d/4  |  翻车 %d 次" % [stage, seed_number, collected, deaths])
 	label_at(Vector2(28, 102), "模式：%s    [M] 切换模式    [TAB] 切换搭子    [R] 重开本关    [N] 新的冒险" % ("单人切换" if solo else "双人同屏"), 18)
 	label_at(Vector2(28, 132), "单人：A/D 或方向键移动，W/↑/空格跳跃    双人：橙 A/D/W，蓝 ←/→/↑", 17)
 	label_at(Vector2(28, 164), "① 各自踩一次同色踏板开门    ② 收齐同色宝石    ③ 一起走进各自的出口", 17)
-	label_at(Vector2(28, 195), "橙色不怕橙色池，蓝色不怕蓝色池；紫色毒汤谁喝谁重来。踏板在出生点右侧。", 17)
+	label_at(Vector2(28, 195), level_hint, 17)
 	label_at(Vector2(28, 229), objective_status(), 18)
 	for rect in platforms:
 		draw_style_box(platform_style(), rect)
@@ -268,6 +318,19 @@ func _draw() -> void:
 		var color := buddy_color(pool.kind) if pool.kind < 2 else Color("9453bd")
 		draw_rect(pool.rect, color)
 		label_at(pool.rect.position + Vector2(4, 16), "~~~", 16, Color.WHITE)
+	for device in devices:
+		if device.type == "spring":
+			draw_rect(Rect2(device.pos - Vector2(18, 10), Vector2(36,10)), Color("e2b83d"))
+			label_at(device.pos + Vector2(-15,-18), "弹", 18)
+		elif device.type == "bridge":
+			draw_rect(Rect2(device.pos - Vector2(16, 8), Vector2(32,8)), buddy_color(device.kind))
+			label_at(device.pos + Vector2(-15,-18), "桥" if not device.active else "好", 18)
+		elif device.type == "wind":
+			draw_rect(device.rect, Color(0.25,0.75,0.75,0.12))
+			for line in 4:
+				var point: Vector2 = device.rect.position + Vector2(30 + line * 22, 110)
+				draw_line(point, point + Vector2(0,-60), Color("63b8bb"), 2)
+				draw_line(point + Vector2(0,-60), point + Vector2(-5,-50), Color("63b8bb"), 2)
 	for i in 2:
 		draw_rect(Rect2(96 + i * 59, 603, 40, 7), buddy_color(i) if plates_activated[i] else buddy_color(i).darkened(0.5))
 		label_at(Vector2(96 + i * 59, 639), "已踩" if plates_activated[i] else "踩我", 14)
@@ -288,7 +351,7 @@ func _draw() -> void:
 			draw_circle(p + Vector2(x + 1, -6), 2, Color("23354d"))
 		draw_arc(p + Vector2(0, 3), 7, 0, PI, 12, Color("23354d"), 2)
 	label_at(Vector2(28, 660), message, 20)
-	label_at(Vector2(28, 696), "Demo 0.2 · Esc 暂停 · F1 帮助 · F11 全屏 · 自动保存关数", 16)
+	label_at(Vector2(28, 696), "Demo 0.3 · Esc 暂停 · F1 帮助 · F11 全屏 · 自动保存关数", 16)
 	if won:
 		draw_rect(Rect2(210, 295, 730, 95), Color("23354d"))
 		label_at(Vector2(270, 352), "搭子下班！下一关马上来……", 30, Color.WHITE)
@@ -298,9 +361,9 @@ func buddy_color(i: int) -> Color:
 
 func platform_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color("79b5a2")
+	style.bg_color = LevelGenerator.THEMES[theme_index][2]
 	style.border_width_top = 5
-	style.border_color = Color("a8ddad")
+	style.border_color = LevelGenerator.THEMES[theme_index][3]
 	return style
 
 func character_style(i: int) -> StyleBoxFlat:
