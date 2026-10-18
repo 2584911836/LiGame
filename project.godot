@@ -1,0 +1,15 @@
+config_version=5
+
+[application]
+config/name="冷热搭子 Cold & Hot Buddies"
+run/main_scene="res://main.tscn"
+config/version="0.1.0"
+
+[display]
+window/size/viewport_width=1152
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.91,0.96,0.98,1)
