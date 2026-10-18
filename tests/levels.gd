@@ -51,7 +51,7 @@ func run() -> void:
 	game.show_pause()
 	var previous: bool = game.sound.enabled
 	game.menu_action("sound")
-	check(game.sound.enabled != previous and game.screen == "pause", "pause menu toggles sound")
+	check(game.sound.enabled != previous and game.screen == "settings", "settings menu toggles sound")
 	# Older saves remain readable after adding mode metadata.
 	game.store.path = "user://migration-test-%d.cfg" % OS.get_process_id()
 	var old := ConfigFile.new()

@@ -9,6 +9,8 @@ const BuddyScript = preload("res://scripts/buddy.gd")
 const Controls = preload("res://scripts/controls.gd")
 const SaveStore = preload("res://scripts/save_store.gd")
 const LevelGenerator = preload("res://scripts/level_generator.gd")
+const GameView = preload("res://scripts/game_view.gd")
+const Settings = preload("res://scripts/settings.gd")
 const Sounds = preload("res://scripts/sounds.gd")
 const Menu = preload("res://scripts/menu.gd")
 var buddies: Array[CharacterBody2D] = []
@@ -41,6 +43,9 @@ var level_hint := ""
 var theme_index := 0
 var completed := false
 var sound: Node
+var view: Node2D
+var settings := Settings.new()
+var settings_return := "title"
 
 
 func _notification(what: int) -> void:
@@ -50,8 +55,13 @@ func _notification(what: int) -> void:
 
 func _ready() -> void:
 	seed_number = int(Time.get_unix_time_from_system()) % 1000000
+	settings.read()
+	view = GameView.new()
+	view.game = self
+	add_child(view)
 	sound = Sounds.new()
 	add_child(sound)
+	apply_settings()
 	Controls.setup()
 	for i in 2:
 		var body := BuddyScript.new()
@@ -68,12 +78,12 @@ func show_title() -> void:
 	var buttons: Array = []
 	if not store.read().is_empty():
 		buttons.append(["继续冒险", "continue"])
-	buttons.append_array([["单人教学 · 六关入职", "solo"], ["双人教学 · 六关团建", "coop"], ["随机挑战 · 无限工单", "endless"], ["玩法与操作", "help"], ["退出游戏", "quit"]])
+	buttons.append_array([["单人教学 · 六关入职", "solo"], ["双人教学 · 六关团建", "coop"], ["随机挑战 · 无限工单", "endless"], ["指定种子挑战", "seed"], ["游戏设置", "settings"], ["玩法与操作", "help"], ["退出游戏", "quit"]])
 	menu.show_screen("冷热搭子", "摸鱼闯关队 · 两个搭子，一起下班！\n支持键盘与手柄 · Enter 确认 · 方向键选择", buttons)
 
 func show_pause() -> void:
 	screen = "pause"
-	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["音效：%s" % ("开" if sound.enabled else "关"), "sound"], ["重开本关", "retry"], ["返回标题", "title"]])
+	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["游戏设置", "settings"], ["重开本关", "retry"], ["返回标题", "title"]])
 
 func menu_action(action: String) -> void:
 	match action:
@@ -100,8 +110,46 @@ func menu_action(action: String) -> void:
 			generate()
 			resume_play()
 		"sound":
-			sound.enabled = not sound.enabled
-			show_pause()
+			settings.volume = 0 if settings.volume > 0 else 0.75
+			apply_settings()
+			if save_enabled:
+				settings.write()
+			show_settings()
+		"settings":
+			settings_return = screen
+			show_settings()
+		"volume":
+			settings.volume = fmod(settings.volume + 0.25,1.25)
+			apply_settings()
+			if save_enabled:
+				settings.write()
+			show_settings()
+		"motion":
+			settings.reduced_motion = not settings.reduced_motion
+			if save_enabled:
+				settings.write()
+			show_settings()
+		"settings_back":
+			if settings_return == "title":
+				show_title()
+			else:
+				show_pause()
+		"seed":
+			screen = "seed"
+			menu.seed_entry()
+		"start_seed":
+			var value: int = menu.read_seed()
+			if value < 0:
+				return
+			seed_number = value
+			stage = 1
+			deaths = 0
+			selected = 0
+			run_mode = "endless"
+			solo = true
+			generate()
+			resume_play()
+			checkpoint()
 		"resume":
 			resume_play()
 		"retry":
@@ -121,6 +169,20 @@ func menu_action(action: String) -> void:
 				show_pause()
 		"quit":
 			get_tree().quit()
+
+func show_settings() -> void:
+	screen = "settings"
+	menu.show_screen("游戏设置", "设置自动保存在本机，可随时修改。", [["音量：%d%%（点击切换）" % int(settings.volume*100), "volume"], ["静音：%s" % ("开" if settings.volume == 0 else "关"), "sound"], ["减少动态效果：%s" % ("开" if settings.reduced_motion else "关"), "motion"], ["返回", "settings_back"]])
+
+func apply_settings() -> void:
+	sound.enabled = settings.volume > 0
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(0.001, settings.volume)))
+	if DisplayServer.get_name() != "headless":
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if settings.fullscreen else DisplayServer.WINDOW_MODE_WINDOWED)
+
+func refresh_view() -> void:
+	if view != null:
+		view.queue_redraw()
 
 func resume_play() -> void:
 	screen = "play"
@@ -163,6 +225,8 @@ func generate() -> void:
 	level_hint = data.hint
 	theme_index = data.theme
 	completed = false
+	if view != null:
+		view.particles.clear()
 	elapsed = 0
 	collected = 0
 	gate_open = false
@@ -195,9 +259,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				resume_play()
 			elif screen == "help":
 				menu_action("back")
+			elif screen == "settings":
+				menu_action("settings_back")
+			elif screen == "seed":
+				show_title()
 		KEY_F11:
-			var mode := DisplayServer.window_get_mode()
-			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if mode == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
+			settings.fullscreen = not settings.fullscreen
+			apply_settings()
+			if save_enabled:
+				settings.write()
 		KEY_F1:
 			if screen != "help":
 				menu_action("help")
@@ -231,7 +301,7 @@ func _physics_process(delta: float) -> void:
 			stage += 1
 			generate()
 			checkpoint()
-		queue_redraw()
+		refresh_view()
 		return
 	for device in devices:
 		device.cooldown = maxf(0, device.cooldown - delta)
@@ -244,22 +314,25 @@ func _physics_process(delta: float) -> void:
 		body.step(delta, control.x, control.y > 0)
 		if body.jumped:
 			sound.play_cue("jump")
+			view.burst(body.position + Vector2(0,20), Color.WHITE, 5)
 		apply_devices(i)
 		for pool in pools:
 			if pool.rect.has_point(body.position + Vector2(0, 20)) and pool.kind != i:
+				view.burst(body.position, view.color_for(i), 14)
 				sound.play_cue("oops")
 				deaths += 1
 				message = "喝错汤了！搭子一起重生，宝石和门锁进度保留。"
 				reset_buddies()
-				queue_redraw()
+				refresh_view()
 				return
 		for gem in gems:
 			if not gem.taken and gem.kind == i and body.position.distance_to(gem.pos) < 34:
+				view.burst(gem.pos, view.color_for(i), 12)
 				sound.play_cue("gem")
 				gem.taken = true
 				collected += 1
 	update_objectives()
-	queue_redraw()
+	refresh_view()
 
 func apply_devices(buddy_id: int) -> void:
 	var body := buddies[buddy_id]
@@ -283,10 +356,12 @@ func update_objectives() -> void:
 	if gate_open and not was_open:
 		sound.play_cue("gate")
 	if not won and gate_open and collected == gems.size() and at_exit(0) and at_exit(1):
+		view.burst(Vector2(1040,560), view.color_for(0), 30)
+		view.burst(Vector2(1100,560), view.color_for(1), 30)
 		sound.play_cue("win")
 		won = true
 		message = "打卡成功！下一份离谱工单正在派送……"
-	queue_redraw()
+	refresh_view()
 
 func at_exit(i: int) -> bool:
 	return Rect2(1020 + i * 60, 550, 40, 60).has_point(buddies[i].position)
@@ -297,83 +372,3 @@ func objective_status() -> String:
 	if collected < gems.size():
 		return "门已开启！还需收集 %d 颗宝石，角色只能收集同色宝石。" % (gems.size() - collected)
 	return "宝石已齐！前往右侧同色出口：橙色%s / 蓝色%s" % ["已到达" if at_exit(0) else "未到达", "已到达" if at_exit(1) else "未到达"]
-
-func label_at(pos: Vector2, text: String, size := 20, color := Color("23354d")) -> void:
-	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
-
-func _draw() -> void:
-	draw_rect(Rect2(0, 0, 1152, 720), LevelGenerator.THEMES[theme_index][1])
-	for i in 8:
-		draw_circle(Vector2(i * 180 + 40, 280 + (i % 3) * 50), 90, Color("e1eef3"))
-	label_at(Vector2(28, 38), "冷热搭子 · " + level_title, 28)
-	label_at(Vector2(28, 70), "第 %d 关  |  种子 %d  |  宝石 %d/4  |  翻车 %d 次" % [stage, seed_number, collected, deaths])
-	label_at(Vector2(28, 102), "模式：%s    [M] 切换模式    [TAB] 切换搭子    [R] 重开本关    [N] 新的冒险" % ("单人切换" if solo else "双人同屏"), 18)
-	label_at(Vector2(28, 132), "单人：A/D 或方向键移动，W/↑/空格跳跃    双人：橙 A/D/W，蓝 ←/→/↑", 17)
-	label_at(Vector2(28, 164), "① 各自踩一次同色踏板开门    ② 收齐同色宝石    ③ 一起走进各自的出口", 17)
-	label_at(Vector2(28, 195), level_hint, 17)
-	label_at(Vector2(28, 229), objective_status(), 18)
-	for rect in platforms:
-		draw_style_box(platform_style(), rect)
-	for pool in pools:
-		var color := buddy_color(pool.kind) if pool.kind < 2 else Color("9453bd")
-		draw_rect(pool.rect, color)
-		label_at(pool.rect.position + Vector2(4, 16), "~~~", 16, Color.WHITE)
-	for device in devices:
-		if device.type == "spring":
-			draw_rect(Rect2(device.pos - Vector2(18, 10), Vector2(36,10)), Color("e2b83d"))
-			label_at(device.pos + Vector2(-15,-18), "弹", 18)
-		elif device.type == "bridge":
-			draw_rect(Rect2(device.pos - Vector2(16, 8), Vector2(32,8)), buddy_color(device.kind))
-			label_at(device.pos + Vector2(-15,-18), "桥" if not device.active else "好", 18)
-		elif device.type == "wind":
-			draw_rect(device.rect, Color(0.25,0.75,0.75,0.12))
-			for line in 4:
-				var point: Vector2 = device.rect.position + Vector2(30 + line * 22, 110)
-				draw_line(point, point + Vector2(0,-60), Color("63b8bb"), 2)
-				draw_line(point + Vector2(0,-60), point + Vector2(-5,-50), Color("63b8bb"), 2)
-	for i in 2:
-		draw_rect(Rect2(96 + i * 59, 603, 40, 7), buddy_color(i) if plates_activated[i] else buddy_color(i).darkened(0.5))
-		label_at(Vector2(96 + i * 59, 639), "已踩" if plates_activated[i] else "踩我", 14)
-		var exit_rect := Rect2(1020 + i * 60, 550, 40, 60)
-		draw_style_box(exit_style(i), exit_rect)
-		label_at(exit_rect.position + Vector2(9, 32), "开" if gate_open else "锁", 17, Color.WHITE)
-	for gem in gems:
-		if not gem.taken:
-			var p: Vector2 = gem.pos
-			draw_colored_polygon(PackedVector2Array([p + Vector2(0,-12), p + Vector2(10,0), p + Vector2(0,12), p + Vector2(-10,0)]), buddy_color(gem.kind))
-	for i in 2:
-		var p := buddies[i].position
-		if solo and i == selected:
-			draw_circle(p, 29, Color(1, 1, 1, 0.9))
-		draw_style_box(character_style(i), Rect2(p - Vector2(15,21), Vector2(30,42)))
-		for x in [-6, 6]:
-			draw_circle(p + Vector2(x, -6), 4, Color.WHITE)
-			draw_circle(p + Vector2(x + 1, -6), 2, Color("23354d"))
-		draw_arc(p + Vector2(0, 3), 7, 0, PI, 12, Color("23354d"), 2)
-	label_at(Vector2(28, 660), message, 20)
-	label_at(Vector2(28, 696), "Demo 0.3 · Esc 暂停 · F1 帮助 · F11 全屏 · 自动保存关数", 16)
-	if won:
-		draw_rect(Rect2(210, 295, 730, 95), Color("23354d"))
-		label_at(Vector2(270, 352), "搭子下班！下一关马上来……", 30, Color.WHITE)
-
-func buddy_color(i: int) -> Color:
-	return Color("f58b40") if i == 0 else Color("38aedd")
-
-func platform_style() -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = LevelGenerator.THEMES[theme_index][2]
-	style.border_width_top = 5
-	style.border_color = LevelGenerator.THEMES[theme_index][3]
-	return style
-
-func character_style(i: int) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = buddy_color(i)
-	style.set_corner_radius_all(10)
-	return style
-
-func exit_style(i: int) -> StyleBoxFlat:
-	var style := character_style(i)
-	if not gate_open:
-		style.bg_color = style.bg_color.darkened(0.5)
-	return style
