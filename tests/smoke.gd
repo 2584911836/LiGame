@@ -17,8 +17,11 @@ func _initialize() -> void:
 
 func run() -> void:
 	game = load("res://main.tscn").instantiate()
+	game.save_enabled = false
 	root.add_child(game)
 	await process_frame
+	game.screen = "play"
+	game.menu.hide()
 	game.set_physics_process(false)
 	check(game.buddies.size() == 2, "two playable characters")
 	game.seed_number = 12345

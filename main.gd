@@ -5,6 +5,10 @@ const SPEED := 245.0
 const JUMP := -720.0
 const GRAVITY := 1450.0
 const QUIPS := ["搭子齐心，其利断金——也可能一起掉进汤里。", "温馨提示：岩浆不是免费温泉。", "本队仅有两个脑细胞，请轮流使用。", "请勿把你的搭子放进微波炉。"]
+const BuddyScript = preload("res://scripts/buddy.gd")
+const Controls = preload("res://scripts/controls.gd")
+const SaveStore = preload("res://scripts/save_store.gd")
+const Menu = preload("res://scripts/menu.gd")
 var buddies: Array[CharacterBody2D] = []
 var platforms: Array[Rect2] = []
 var pools: Array[Dictionary] = []
@@ -22,19 +26,94 @@ var transition := 0.0
 var message := ""
 var font: Font = preload("res://assets/ui-font.otf")
 var rng := RandomNumberGenerator.new()
+var screen := "title"
+var help_return := "title"
+var menu: CanvasLayer
+var store := SaveStore.new()
+var save_enabled := true
+var elapsed := 0.0
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and screen == "play" and menu != null:
+		show_pause()
+
 
 func _ready() -> void:
 	seed_number = int(Time.get_unix_time_from_system()) % 1000000
+	Controls.setup()
 	for i in 2:
-		var body := CharacterBody2D.new()
-		var shape := CollisionShape2D.new()
-		var box := RectangleShape2D.new()
-		box.size = Vector2(30, 42)
-		shape.shape = box
-		body.add_child(shape)
+		var body := BuddyScript.new()
 		add_child(body)
 		buddies.append(body)
 	generate()
+	menu = Menu.new()
+	add_child(menu)
+	menu.chosen.connect(menu_action)
+	show_title()
+
+func show_title() -> void:
+	screen = "title"
+	var buttons: Array = []
+	if not store.read().is_empty():
+		buttons.append(["继续冒险", "continue"])
+	buttons.append_array([["单人出发", "solo"], ["双人同屏", "coop"], ["玩法与操作", "help"], ["退出游戏", "quit"]])
+	menu.show_screen("冷热搭子", "摸鱼闯关队 · 两个搭子，一起下班！\n支持键盘与手柄 · Enter 确认 · 方向键选择", buttons)
+
+func show_pause() -> void:
+	screen = "pause"
+	menu.show_screen("休息一下", "当前关卡已暂停。返回标题后可从本关起点继续。", [["继续游戏", "resume"], ["玩法与操作", "help"], ["重开本关", "retry"], ["返回标题", "title"]])
+
+func menu_action(action: String) -> void:
+	match action:
+		"solo", "coop":
+			solo = action == "solo"
+			selected = 0
+			stage = 1
+			deaths = 0
+			seed_number = int(Time.get_unix_time_from_system()) % 1000000
+			generate()
+			resume_play()
+			checkpoint()
+		"continue":
+			var saved := store.read()
+			if saved.is_empty():
+				show_title()
+				return
+			stage = saved.stage
+			seed_number = saved.seed
+			solo = saved.solo
+			selected = 0
+			generate()
+			resume_play()
+		"resume":
+			resume_play()
+		"retry":
+			generate()
+			resume_play()
+		"title":
+			checkpoint()
+			show_title()
+		"help":
+			help_return = screen
+			screen = "help"
+			menu.show_screen("搭子入职指南", "单人：A/D 或方向键移动，W/↑/空格跳跃，Tab 换人。\n双人：橙色 A/D/W，蓝色方向键。M 切换模式。\n手柄：左摇杆移动，A 跳跃；单人 X 换人，Start 暂停。\n各踩一次同色踏板 → 收齐四颗宝石 → 两人进入同色门。\n橙色怕蓝池，蓝色怕橙池，紫池谁碰谁翻车！\nEsc 暂停，F1 帮助，F11 全屏；R 重开，N 新冒险。\n自动保存关数和种子，继续游戏从本关起点开始。", [["明白了", "back"]])
+		"back":
+			if help_return == "title":
+				show_title()
+			else:
+				show_pause()
+		"quit":
+			get_tree().quit()
+
+func resume_play() -> void:
+	screen = "play"
+	menu.hide()
+	for buddy in buddies:
+		buddy.jump_was_held = true
+
+func checkpoint() -> void:
+	if save_enabled and not store.write(stage, seed_number, solo):
+		message = "存档写入失败，本次仍可继续游玩。"
 
 func add_platform(rect: Rect2) -> void:
 	platforms.append(rect)
@@ -66,6 +145,7 @@ func generate() -> void:
 		var y := rng.randf_range(465, 505)
 		add_platform(Rect2(x - 8, y, 125, 18))
 		gems.append({"pos": Vector2(x + 45, y - 28), "kind": i % 2, "taken": false})
+	elapsed = 0
 	collected = 0
 	gate_open = false
 	plates_activated = [false, false]
@@ -77,50 +157,62 @@ func generate() -> void:
 func reset_buddies() -> void:
 	for i in 2:
 		buddies[i].position = Vector2(65 + i * 48, 575)
-		buddies[i].velocity = Vector2.ZERO
+		buddies[i].reset_motion()
 
-func _unhandled_key_input(event: InputEvent) -> void:
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("switch_buddy") and screen == "play":
+		selected = 1 - selected
+	if event is InputEventJoypadButton and event.pressed and event.button_index == JOY_BUTTON_START:
+		if screen == "play":
+			show_pause()
+		elif screen == "pause":
+			resume_play()
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	match event.keycode:
-		KEY_TAB:
-			selected = 1 - selected
+		KEY_ESCAPE:
+			if screen == "play":
+				show_pause()
+			elif screen == "pause":
+				resume_play()
+			elif screen == "help":
+				menu_action("back")
+		KEY_F11:
+			var mode := DisplayServer.window_get_mode()
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if mode == DisplayServer.WINDOW_MODE_FULLSCREEN else DisplayServer.WINDOW_MODE_FULLSCREEN)
+		KEY_F1:
+			if screen != "help":
+				menu_action("help")
+	if screen != "play":
+		return
+	match event.keycode:
 		KEY_M:
 			solo = not solo
+			checkpoint()
 		KEY_R:
 			generate()
 		KEY_N:
 			seed_number = (seed_number + 104729) % 1000000
 			stage = 1
 			generate()
+			checkpoint()
 
 func _physics_process(delta: float) -> void:
+	if screen != "play":
+		return
+	elapsed += delta
 	if won:
 		transition += delta
 		if transition > 1.8:
 			stage += 1
 			generate()
+			checkpoint()
 		queue_redraw()
 		return
 	for i in 2:
 		var body := buddies[i]
-		var horizontal := 0.0
-		var jump := false
-		if solo:
-			if i == selected:
-				horizontal = float(Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)) - float(Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT))
-				jump = Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP) or Input.is_physical_key_pressed(KEY_SPACE)
-		else:
-			var left := KEY_A if i == 0 else KEY_LEFT
-			var right := KEY_D if i == 0 else KEY_RIGHT
-			var up := KEY_W if i == 0 else KEY_UP
-			horizontal = float(Input.is_physical_key_pressed(right)) - float(Input.is_physical_key_pressed(left))
-			jump = Input.is_physical_key_pressed(up)
-		body.velocity.x = horizontal * SPEED
-		body.velocity.y += GRAVITY * delta
-		if body.is_on_floor() and jump:
-			body.velocity.y = JUMP
-		body.move_and_slide()
+		var control: Vector2 = Controls.read(solo, selected, i)
+		body.step(delta, control.x, control.y > 0)
 		for pool in pools:
 			if pool.rect.has_point(body.position + Vector2(0, 20)) and pool.kind != i:
 				deaths += 1
@@ -196,7 +288,7 @@ func _draw() -> void:
 			draw_circle(p + Vector2(x + 1, -6), 2, Color("23354d"))
 		draw_arc(p + Vector2(0, 3), 7, 0, PI, 12, Color("23354d"), 2)
 	label_at(Vector2(28, 660), message, 20)
-	label_at(Vector2(28, 696), "Demo 0.1.1 · 随机关卡 · 无限重试 · 原创几何画风 · 无联网需求", 16)
+	label_at(Vector2(28, 696), "Demo 0.2 · Esc 暂停 · F1 帮助 · F11 全屏 · 自动保存关数", 16)
 	if won:
 		draw_rect(Rect2(210, 295, 730, 95), Color("23354d"))
 		label_at(Vector2(270, 352), "搭子下班！下一关马上来……", 30, Color.WHITE)
