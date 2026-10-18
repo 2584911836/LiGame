@@ -16,6 +16,7 @@ var solo := true
 var deaths := 0
 var collected := 0
 var gate_open := false
+var plates_activated: Array[bool] = [false, false]
 var won := false
 var transition := 0.0
 var message := ""
@@ -67,6 +68,7 @@ func generate() -> void:
 		gems.append({"pos": Vector2(x + 45, y - 28), "kind": i % 2, "taken": false})
 	collected = 0
 	gate_open = false
+	plates_activated = [false, false]
 	won = false
 	transition = 0
 	message = QUIPS[(stage - 1) % QUIPS.size()]
@@ -130,13 +132,29 @@ func _physics_process(delta: float) -> void:
 			if not gem.taken and gem.kind == i and body.position.distance_to(gem.pos) < 34:
 				gem.taken = true
 				collected += 1
-	# Stand on separate plates to permanently unlock both exits.
-	if buddies[0].position.distance_to(Vector2(116, 589)) < 36 and buddies[1].position.distance_to(Vector2(175, 589)) < 36:
-		gate_open = true
-	if gate_open and collected == gems.size() and buddies[0].position.distance_to(Vector2(1040, 579)) < 35 and buddies[1].position.distance_to(Vector2(1100, 579)) < 35:
+	update_objectives()
+	queue_redraw()
+
+func update_objectives() -> void:
+	# Each matching plate latches separately so solo players can activate them in any order.
+	for i in 2:
+		if Rect2(96 + i * 59, 565, 40, 45).has_point(buddies[i].position):
+			plates_activated[i] = true
+	gate_open = plates_activated[0] and plates_activated[1]
+	if gate_open and collected == gems.size() and at_exit(0) and at_exit(1):
 		won = true
 		message = "打卡成功！下一份离谱工单正在派送……"
 	queue_redraw()
+
+func at_exit(i: int) -> bool:
+	return Rect2(1020 + i * 60, 550, 40, 60).has_point(buddies[i].position)
+
+func objective_status() -> String:
+	if not gate_open:
+		return "开门进度：橙色踏板%s / 蓝色踏板%s（各踩一次即可）" % ["已激活" if plates_activated[0] else "未激活", "已激活" if plates_activated[1] else "未激活"]
+	if collected < gems.size():
+		return "门已开启！还需收集 %d 颗宝石，角色只能收集同色宝石。" % (gems.size() - collected)
+	return "宝石已齐！前往右侧同色出口：橙色%s / 蓝色%s" % ["已到达" if at_exit(0) else "未到达", "已到达" if at_exit(1) else "未到达"]
 
 func label_at(pos: Vector2, text: String, size := 20, color := Color("23354d")) -> void:
 	draw_string(font, pos, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
@@ -149,8 +167,9 @@ func _draw() -> void:
 	label_at(Vector2(28, 70), "第 %d 关  |  种子 %d  |  宝石 %d/4  |  翻车 %d 次" % [stage, seed_number, collected, deaths])
 	label_at(Vector2(28, 102), "模式：%s    [M] 切换模式    [TAB] 切换搭子    [R] 重开本关    [N] 新的冒险" % ("单人切换" if solo else "双人同屏"), 18)
 	label_at(Vector2(28, 132), "单人：A/D 或方向键移动，W/↑/空格跳跃    双人：橙 A/D/W，蓝 ←/→/↑", 17)
-	label_at(Vector2(28, 164), "① 两人站到各自颜色的踏板上开门    ② 收齐同色宝石    ③ 一起走进各自的出口", 17)
+	label_at(Vector2(28, 164), "① 各自踩一次同色踏板开门    ② 收齐同色宝石    ③ 一起走进各自的出口", 17)
 	label_at(Vector2(28, 195), "橙色不怕橙色池，蓝色不怕蓝色池；紫色毒汤谁喝谁重来。踏板在出生点右侧。", 17)
+	label_at(Vector2(28, 229), objective_status(), 18)
 	for rect in platforms:
 		draw_style_box(platform_style(), rect)
 	for pool in pools:
@@ -158,7 +177,8 @@ func _draw() -> void:
 		draw_rect(pool.rect, color)
 		label_at(pool.rect.position + Vector2(4, 16), "~~~", 16, Color.WHITE)
 	for i in 2:
-		draw_rect(Rect2(96 + i * 59, 603, 40, 7), buddy_color(i))
+		draw_rect(Rect2(96 + i * 59, 603, 40, 7), buddy_color(i) if plates_activated[i] else buddy_color(i).darkened(0.5))
+		label_at(Vector2(96 + i * 59, 639), "已踩" if plates_activated[i] else "踩我", 14)
 		var exit_rect := Rect2(1020 + i * 60, 550, 40, 60)
 		draw_style_box(exit_style(i), exit_rect)
 		label_at(exit_rect.position + Vector2(9, 32), "开" if gate_open else "锁", 17, Color.WHITE)
@@ -176,7 +196,7 @@ func _draw() -> void:
 			draw_circle(p + Vector2(x + 1, -6), 2, Color("23354d"))
 		draw_arc(p + Vector2(0, 3), 7, 0, PI, 12, Color("23354d"), 2)
 	label_at(Vector2(28, 660), message, 20)
-	label_at(Vector2(28, 696), "Demo 0.1 · 随机关卡 · 无限重试 · 原创几何画风 · 无联网需求", 16)
+	label_at(Vector2(28, 696), "Demo 0.1.1 · 随机关卡 · 无限重试 · 原创几何画风 · 无联网需求", 16)
 	if won:
 		draw_rect(Rect2(210, 295, 730, 95), Color("23354d"))
 		label_at(Vector2(270, 352), "搭子下班！下一关马上来……", 30, Color.WHITE)
